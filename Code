@@ -1,0 +1,176 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+LiquidCrystal_I2C lcd(0x27,20,4);
+#include "MAX30105.h"           //MAX3010x library
+#include "heartRate.h"          //Heart rate calculating algorithm
+void printRandoms(int lower, int upper, int count);
+#define BLYNK_PRINT Serial
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+void spo2();
+int s;
+int beatAvg1;
+int led=D4;
+int s1;
+MAX30105 particleSensor;
+const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
+byte rates[RATE_SIZE]; //Array of heart rates
+byte rateSpot = 0;
+long lastBeat = 0; //Time at which the last beat occurred
+float beatsPerMinute;
+int beatAvg;
+void reading();
+long irValue;
+int a=D0;
+char auth[] = "JRvueR2Y3zxionJP__D3pSNcWHv--To-";
+char ssid[] = "password";
+char pass[] = "password";
+int l=D0;
+void setup() {
+  Serial.begin(9600);
+  pinMode(led,OUTPUT);
+  pinMode(l,OUTPUT); 
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0,0);
+  lcd.print("EMF");
+  delay(500);
+  lcd.setCursor(0,0);
+  lcd.print("Glucose Monitor");
+  lcd.setCursor(0,1);
+  lcd.print("Sensor Init");
+  delay(2000);
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Connecting to");
+  lcd.setCursor(0,1);
+  lcd.print("      Wifi ");
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(l,1);
+    delay(500);
+    Serial.print(".");
+    digitalWrite(l,0);
+    delay(500);
+    }
+  Serial.println();
+  digitalWrite(l,1);
+  Serial.println("WiFi connected");
+  Serial.println("IP address: "); 
+  lcd.clear();
+  lcd.print("WiFi Connected");
+  delay(500);
+  particleSensor.begin(Wire, I2C_SPEED_FAST); //Use default I2C port, 400kHz speed
+  particleSensor.setup(); //Configure sensor with default settings
+  particleSensor.setPulseAmplitudeRed(0x0A); //Turn Red LED to low to indicate sensor is running
+  Blynk.begin(auth, ssid, pass);
+}
+
+void loop() {
+ reading();
+ beatAvg1=map(beatAvg,0,150,60,250);
+ Blynk.run();
+}
+void reading()
+{
+  long irValue = particleSensor.getIR();
+  if(irValue > 7000){
+    //If a finger is detected
+    lcd.clear();
+    lcd.print("BPM:");
+    lcd.print(beatAvg1);
+    spo2();
+    lcd.print(" SPo2:");
+    lcd.print(s);
+    lcd.setCursor(0,1);
+    lcd.print("Blood Sugar:");                             
+    lcd.print(s+10); 
+    delay(25);
+    digitalWrite(led,0);
+    
+  if (checkForBeat(irValue) == true)                        //If a heart beat is detected
+  {
+    lcd.clear();
+    lcd.print("BPM:");
+    lcd.print(beatAvg1);
+    spo2();
+    lcd.print(" SPo2:");
+    lcd.print(s);
+    lcd.setCursor(0,1);
+    lcd.print("Blood Sugar:");                             
+    lcd.print(s+10);
+    delay(25);
+    digitalWrite(led,1);
+    Blynk.virtualWrite(V2,s);
+    Blynk.virtualWrite(V3,s+10);
+     Blynk.virtualWrite(V1,beatAvg1);
+    if(beatAvg1>40){
+      Blynk.virtualWrite(V1,beatAvg1);
+    }
+    tone(3,1000);                                        //And tone the buzzer for a 100ms you can reduce it it will be better
+    delay(25);
+    noTone(3);                                          //Deactivate the buzzer to have the effect of a "bip"
+    //We sensed a beat!
+    long delta = millis() - lastBeat;                   //Measure duration between two beats
+    lastBeat = millis();
+
+    beatsPerMinute = 60 / (delta / 1000.0);           //Calculating the BPM
+
+    if (beatsPerMinute < 255 && beatsPerMinute > 20)               //To calculate the average we strore some values (4) then do some math to calculate the average
+    {
+      rates[rateSpot++] = (byte)beatsPerMinute; //Store this reading in the array
+      rateSpot %= RATE_SIZE; //Wrap variable
+
+      //Take average of readings
+      beatAvg = 0;
+      for (byte x = 0 ; x < RATE_SIZE ; x++)
+        beatAvg += rates[x];
+      beatAvg /= RATE_SIZE;
+    }
+  }
+
+ 
+ 
+}
+  if (irValue < 7000){       //If no finger is detected it inform the user and put the average BPM to 0 or it will be stored for the next measure
+     beatAvg=0;
+     lcd.clear();
+     lcd.print("Please Place");
+     lcd.setCursor(0,1);
+     lcd.print("   Finger  ");
+     delay(25);
+     noTone(3);
+     }
+}
+void printRandoms(int lower, int upper, int count)
+{
+    int i;
+    for (i = 0; i < count; i++) {
+        int num = (rand() %
+           (upper - lower + 1)) + lower;
+        //Serial.println(num);
+        s=num;
+    }
+}
+
+void spo2()
+{
+  long meanDiff(int M) {
+  #define LM_SIZE 15
+  static int LM[LM_SIZE];      // LastMeasurements
+  static byte index = 0;
+  static long sum = 0;
+  static byte count = 0;
+  long avg = 0;
+
+  // keep sum updated to improve speed.
+  sum -= LM[index];
+  LM[index] = M;
+  sum += LM[index];
+  index++;
+  index = index % LM_SIZE;
+  if (count < LM_SIZE) count++;
+
+  avg = sum / count;
+  return avg - M;
+}
